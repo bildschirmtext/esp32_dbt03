@@ -30,10 +30,18 @@
 #include <lwip/netdb.h>
 
 
+// PINOUTS
 #define GPIO_OUTPUT_ED    GPIO_NUM_18
 #define GPIO_INPUT_SD    GPIO_NUM_19
 #define GPIO_INPUT_START GPIO_NUM_20
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_IO_0) | (1ULL<<GPIO_OUTPUT_IO_1))
+
+
+//WLAN settings
+#define EXAMPLE_ESP_WIFI_SSID      "SSID"
+#define EXAMPLE_ESP_WIFI_PASS      "Password"
+#define EXAMPLE_ESP_MAXIMUM_RETRY  5
+
 
 static const char *TAG = "wifi station";
 
@@ -43,6 +51,8 @@ static const char *TAG = "wifi station";
 #define LEDC_HS_CH0_CHANNEL    LEDC_CHANNEL_0
 
 
+
+//We use UART_1 for sending at 1200bps and UART_2 for receiving at 75bps
 void init_uart()
 {
 	printf("init_uart\n");
@@ -64,6 +74,7 @@ void init_uart()
 	ESP_ERROR_CHECK(uart_driver_install(UART_NUM_2, 128 * 2, 0, 0, NULL, 0));
 }
 
+//The LED PWM timer is used to simulate the tones
 void init_led()
 {
 	ledc_timer_config_t ledc_timer = {
@@ -76,6 +87,8 @@ void init_led()
 	ledc_timer_config(&ledc_timer);
 }
 
+//This function sets the LED PWM timer to a certain frequency
+// frq=0 stops the timer
 void beep_led(const int frq)
 {
 
@@ -100,7 +113,7 @@ void beep_led(const int frq)
 }
 
 
-
+//This is the task that connects the TCP socket to the serial lines
 static void tcp_client_task(void *pvParameters)
 {
 
@@ -174,14 +187,6 @@ static void tcp_client_task(void *pvParameters)
 
 
 
-/* The examples use WiFi configuration that you can set via 'make menuconfig'.
-
-   If you'd rather not, just change the below entries to strings with
-   the config you want - ie #define EXAMPLE_WIFI_SSID "mywifissid"
-*/
-#define EXAMPLE_ESP_WIFI_SSID      "SSID"
-#define EXAMPLE_ESP_WIFI_PASS      "Password"
-#define EXAMPLE_ESP_MAXIMUM_RETRY  5
 
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t s_wifi_event_group;
@@ -193,6 +198,7 @@ const int WIFI_CONNECTED_BIT = BIT0;
 
 static int s_retry_num = 0;
 
+//This event handler deals with WLAN events and starts the tcp_client_task
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
 {
@@ -266,11 +272,11 @@ void app_main()
 
 
 	wifi_init_sta();
-	vTaskDelay(1500/ portTICK_PERIOD_MS);
 
-	for (int i = 1000; i >= 0; i--) {
-		vTaskDelay(1000 / portTICK_PERIOD_MS);
+	while (0==0) {
+		vTaskDelay(10000 / portTICK_PERIOD_MS);
 	}
+
 	printf("Restarting now.\n");
 	fflush(stdout);
 	esp_restart();
