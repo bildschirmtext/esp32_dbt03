@@ -1,5 +1,7 @@
-# Hello World Example
+This is a simple attempt at making an emulator for the old BTX modems.
 
-Starts a FreeRTOS task to print "Hello World"
 
-See the README.md file in the upper level 'examples' directory for more information about examples.
+
+  GPIO 18 -> Level Shifter -> Pin ED
+  GPIO 19 <- Level Shifter <- Pin SD
+  GPOI 20 <- Level Shifter <- Pin S (not used now)
