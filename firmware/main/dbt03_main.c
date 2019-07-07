@@ -19,6 +19,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "driver/ledc.h"
+#include "esp_timer.h"
 #include <string.h>
 #include "driver/uart.h"
 #include "driver/gpio.h"
@@ -33,13 +34,15 @@
 // PINOUTS
 #define GPIO_OUTPUT_ED    GPIO_NUM_18
 #define GPIO_INPUT_SD    GPIO_NUM_19
-#define GPIO_INPUT_START GPIO_NUM_20
+#define GPIO_INPUT_S GPIO_NUM_21
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_IO_0) | (1ULL<<GPIO_OUTPUT_IO_1))
 
 
 //WLAN settings
-#define EXAMPLE_ESP_WIFI_SSID      "SSID"
-#define EXAMPLE_ESP_WIFI_PASS      "Password"
+#include "wifi_settings.h"
+//Set your WLAN either here or in /wifi_settings.h
+//#define EXAMPLE_ESP_WIFI_SSID      "SSID"
+//#define EXAMPLE_ESP_WIFI_PASS      "Password"
 #define EXAMPLE_ESP_MAXIMUM_RETRY  5
 
 
@@ -50,6 +53,110 @@ static const char *TAG = "wifi station";
 #define LEDC_HS_CH0_GPIO       (18)
 #define LEDC_HS_CH0_CHANNEL    LEDC_CHANNEL_0
 
+
+#define SW_UART_LOW (1)
+#define SW_UART_HIGH (0)
+#define SW_UART_BSIZE (16)
+
+static int sw_uart_state=-1; //State -1=idle, 0... position in frame
+static uint8_t sw_uart_data=0; //data of the current frame
+static uint8_t sw_uart_bits=0; //number of bits during sampling period
+static uint8_t sw_uart_wp=0;  //write pointer
+static uint8_t sw_uart_rp=0; //read pointer
+static uint8_t sw_uart_buffer[SW_UART_BSIZE]; //buffer
+
+static int uartc=0;
+
+
+
+
+static void software_uart_callback(void* arg)
+{
+	uartc=uartc+1;
+	int level=gpio_get_level(GPIO_INPUT_SD);
+	if (sw_uart_state<0) { //idle state
+		if (level==SW_UART_LOW) { //Start Bit
+			sw_uart_state=0;
+			sw_uart_data=0;
+			sw_uart_bits=0;
+		}
+		return;
+	} 
+	int bn=sw_uart_state/16; //which bit is it 0=start
+	int ib=sw_uart_state%16; //Position within bit
+	sw_uart_state=sw_uart_state+1; //count up state
+	if ((ib>=6) && (ib<=8)) { //Middle 3 samples within a bit
+		if (level==SW_UART_HIGH)
+			sw_uart_bits=sw_uart_bits+1; //Count those bits for majority decision
+		return;
+	}
+	if (ib==9) { //After the sampling	
+		if ( (bn>=1) && (bn<=8) ) { //Data bits
+			sw_uart_data=(sw_uart_data>>1);
+			if (sw_uart_bits>=2) sw_uart_data=sw_uart_data | (1 << 7);
+			sw_uart_bits=0; //Reset bit counter
+		}
+		if (bn>=9) { //Stop bit
+			if (level==SW_UART_HIGH) { //Stop bit OK
+				//Fixme check for full buffer
+				sw_uart_buffer[sw_uart_wp]=sw_uart_data;
+				sw_uart_wp=(sw_uart_wp+1)%SW_UART_BSIZE;
+			}
+			sw_uart_state=-1; //set state to idle
+		}
+	}
+	return;
+}
+
+int software_uart_read()
+{
+	if (sw_uart_wp==sw_uart_rp) return -1;
+	int d=sw_uart_buffer[sw_uart_rp];
+	sw_uart_rp=(sw_uart_rp+1)%SW_UART_BSIZE;
+	return d;
+}
+
+void init_software_uart()
+{
+	gpio_config_t io_conf;
+	io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
+	io_conf.mode = GPIO_MODE_INPUT;
+	io_conf.pin_bit_mask = (1ULL<<GPIO_INPUT_SD);
+	io_conf.pull_down_en = 0;
+	io_conf.pull_up_en = 0;
+	//configure GPIO with the given settings
+	gpio_config(&io_conf);
+	const esp_timer_create_args_t periodic_timer_args = {
+		.callback = &software_uart_callback,
+		/* name is optional, but may help identify the timer when debugging */
+		.name = "swuart"
+	};
+	esp_timer_handle_t periodic_timer;
+	ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &periodic_timer));
+	ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 1000000/1200)); //1200 Hz output rate of the timer
+	sw_uart_state=-1;
+	sw_uart_wp=0;
+	sw_uart_rp=0;
+}
+
+
+void send_gpio_break()
+{
+	return;
+	gpio_config_t io_conf;
+	//disable interrupt
+	io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
+	//set as output mode
+	io_conf.mode = GPIO_MODE_OUTPUT;
+	io_conf.pin_bit_mask = (1ULL<<GPIO_OUTPUT_ED);
+	io_conf.pull_down_en = 0;
+	io_conf.pull_up_en = 0;
+	//configure GPIO with the given settings
+	gpio_config(&io_conf);
+	gpio_set_level(GPIO_OUTPUT_ED,0);
+	vTaskDelay(200/portTICK_PERIOD_MS);
+	gpio_set_level(GPIO_OUTPUT_ED,1);
+}
 
 
 //We use UART_1 for sending at 1200bps and UART_2 for receiving at 75bps
@@ -67,11 +174,11 @@ void init_uart()
 	ESP_ERROR_CHECK(uart_param_config(UART_NUM_1, &uart_config));
 	ESP_ERROR_CHECK(uart_set_pin(UART_NUM_1, GPIO_OUTPUT_ED, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 	ESP_ERROR_CHECK(uart_driver_install(UART_NUM_1, 128 * 2, 0, 0, NULL, 0));
-	//RX 75bps Terminal=>IP
+/*	//RX 75bps Terminal=>IP
 	uart_config.baud_rate=75;
 	ESP_ERROR_CHECK(uart_param_config(UART_NUM_2, &uart_config));
 	ESP_ERROR_CHECK(uart_set_pin(UART_NUM_2, UART_PIN_NO_CHANGE, GPIO_INPUT_SD, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-	ESP_ERROR_CHECK(uart_driver_install(UART_NUM_2, 128 * 2, 0, 0, NULL, 0));
+	ESP_ERROR_CHECK(uart_driver_install(UART_NUM_2, 128 * 2, 0, 0, NULL, 0));*/
 }
 
 //The LED PWM timer is used to simulate the tones
@@ -102,7 +209,7 @@ void beep_led(const int frq)
 	};
 
 	if (frq==0) {
-		ledc_stop(ledc_channel.speed_mode, ledc_channel.channel, 1);
+		ledc_stop(ledc_channel.speed_mode, ledc_channel.channel, 0);
 	} else {
 
 		ledc_set_freq(ledc_channel.speed_mode, ledc_channel.channel, frq);
@@ -117,17 +224,26 @@ void beep_led(const int frq)
 static void tcp_client_task(void *pvParameters)
 {
 
+	
+	ESP_LOGE(TAG, "Connecting\n");
 	char addr_str[128];
 	int addr_family;
 	int ip_protocol;
+	
+	beep_led(440);
+	vTaskDelay(500/portTICK_PERIOD_MS);
 	beep_led(0);
-	vTaskDelay(1000 /portTICK_PERIOD_MS);
-	beep_led(1700);
+	vTaskDelay(500/portTICK_PERIOD_MS);
+	beep_led(1300);
+//	vTaskDelay(1650/portTICK_PERIOD_MS);
+	vTaskDelay(500/portTICK_PERIOD_MS);
+	beep_led(0);
 
-	vTaskDelay(500 / portTICK_PERIOD_MS);
-	beep_led(0);
-	vTaskDelay(1000 /portTICK_PERIOD_MS);
+
+	init_software_uart();
 	init_uart();
+
+		
 
 	while (1) {
 		struct sockaddr_in dest_addr;
@@ -151,22 +267,31 @@ static void tcp_client_task(void *pvParameters)
 			break;
 		}
 		ESP_LOGI(TAG, "Successfully connected");
+		/* set recv timeout (100 ms) */
+		int opt = 100;
+		lwip_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &opt, sizeof(int));
 
 		while (1) {
 			char tx_buffer[8]; //Terminal=>IP
-			int tx_len = uart_read_bytes(UART_NUM_2, (unsigned char*) tx_buffer, sizeof(tx_buffer), 0);
-			int err = send(sock, tx_buffer, tx_len, 0);
-			if (err < 0) {
-				ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
-				break;
+			int tx_len = software_uart_read();
+			if (tx_len>=0) {
+				ESP_LOGE(TAG, "read %d from UART\n", tx_len);
+				tx_buffer[0]=tx_len;
+				int err = send(sock, tx_buffer, 1, 0);
+				if (err < 0) {
+					ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+					break;
+				}
 			}
 
 			char rx_buffer[8]; //IP=>Terminal
-			int rx_len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
+			int rx_len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, MSG_DONTWAIT);
 			// Error occurred during receiving
 			if (rx_len < 0) {
-				ESP_LOGE(TAG, "recv failed: errno %d", errno);
-				break;
+				if (errno!=11) {
+					ESP_LOGE(TAG, "recv failed: errno %d", errno);
+					break;
+				}
 			}
 			// Data received
 			else {
@@ -260,6 +385,22 @@ void app_main()
 
 	init_led();
 	beep_led(440);
+	printf("Waiting for S to go now.\n");
+	//Configure S-Input which starts up the modem
+	gpio_config_t io_conf;
+	io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
+	io_conf.mode = GPIO_MODE_INPUT;
+	io_conf.pin_bit_mask = (1ULL<<GPIO_INPUT_S);
+	io_conf.pull_down_en = 0;
+	io_conf.pull_up_en = 0;
+	gpio_config(&io_conf);
+	while ((gpio_get_level(GPIO_INPUT_S))!=0){
+		vTaskDelay(100/portTICK_PERIOD_MS);
+	}
+
+	vTaskDelay(1000/portTICK_PERIOD_MS);
+	beep_led(0);
+	vTaskDelay(2000/portTICK_PERIOD_MS);
 
 	//Initialize NVS
 	esp_err_t ret = nvs_flash_init();
