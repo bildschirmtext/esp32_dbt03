@@ -414,8 +414,9 @@ void app_main()
 
 	wifi_init_sta();
 
-	while (0==0) {
-		vTaskDelay(10000 / portTICK_PERIOD_MS);
+	//Wait to shut down
+	while ((gpio_get_level(GPIO_INPUT_S))==0){
+		vTaskDelay(100/portTICK_PERIOD_MS);
 	}
 
 	printf("Restarting now.\n");
