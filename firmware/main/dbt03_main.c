@@ -28,7 +28,9 @@
 #include "lwip/sys.h"
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
-#include <lwip/netdb.h>
+#include "lwip/netdb.h"
+
+#include "applications.h"
 
 
 // PINOUTS
@@ -108,7 +110,7 @@ static void software_uart_callback(void* arg)
 	return;
 }
 
-int software_uart_read()
+int software_uart_read(int x)
 {
 	if (sw_uart_wp==sw_uart_rp) return -1;
 	int d=sw_uart_buffer[sw_uart_rp];
@@ -181,6 +183,14 @@ void init_uart()
 	ESP_ERROR_CHECK(uart_driver_install(UART_NUM_2, 128 * 2, 0, 0, NULL, 0));*/
 }
 
+int uart_write(int x)
+{
+	char rx_buffer[1];
+	rx_buffer[0]=x;
+	uart_write_bytes(UART_NUM_1, (const char *) rx_buffer, 1);
+	return -1;
+}
+
 //The LED PWM timer is used to simulate the tones
 void init_led()
 {
@@ -220,93 +230,30 @@ void beep_led(const int frq)
 }
 
 
+int terminal_status(int x)
+{
+	if ((gpio_get_level(GPIO_INPUT_S))==0) return 0;
+	return -1;
+}
+
+
 //This is the task that connects the TCP socket to the serial lines
 static void tcp_client_task(void *pvParameters)
 {
-
-	
 	ESP_LOGE(TAG, "Connecting\n");
-	char addr_str[128];
-	int addr_family;
-	int ip_protocol;
-	
+
 	beep_led(440);
 	vTaskDelay(500/portTICK_PERIOD_MS);
 	beep_led(0);
 	vTaskDelay(500/portTICK_PERIOD_MS);
 	beep_led(1300);
-//	vTaskDelay(1650/portTICK_PERIOD_MS);
 	vTaskDelay(500/portTICK_PERIOD_MS);
 	beep_led(0);
-
-
 	init_software_uart();
 	init_uart();
-
 		
+	application(software_uart_read, uart_write, terminal_status);
 
-	while (1) {
-		struct sockaddr_in dest_addr;
-		dest_addr.sin_addr.s_addr = inet_addr("195.201.94.166");
-		dest_addr.sin_family = AF_INET;
-		dest_addr.sin_port = htons(20000);
-		addr_family = AF_INET;
-		ip_protocol = IPPROTO_IP;
-		inet_ntoa_r(dest_addr.sin_addr, addr_str, sizeof(addr_str) - 1);
-
-		int sock =  socket(addr_family, SOCK_STREAM, ip_protocol);
-		if (sock < 0) {
-			ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
-			break;
-		}
-		ESP_LOGI(TAG, "Socket created, connecting to ");
-
-		int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-		if (err != 0) {
-			ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
-			break;
-		}
-		ESP_LOGI(TAG, "Successfully connected");
-		/* set recv timeout (100 ms) */
-		int opt = 100;
-		lwip_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &opt, sizeof(int));
-
-		while (1) {
-			char tx_buffer[8]; //Terminal=>IP
-			int tx_len = software_uart_read();
-			if (tx_len>=0) {
-				ESP_LOGE(TAG, "read %d from UART\n", tx_len);
-				tx_buffer[0]=tx_len;
-				int err = send(sock, tx_buffer, 1, 0);
-				if (err < 0) {
-					ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
-					break;
-				}
-			}
-
-			char rx_buffer[8]; //IP=>Terminal
-			int rx_len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, MSG_DONTWAIT);
-			// Error occurred during receiving
-			if (rx_len < 0) {
-				if (errno!=11) {
-					ESP_LOGE(TAG, "recv failed: errno %d", errno);
-					break;
-				}
-			}
-			// Data received
-			else {
-				uart_write_bytes(UART_NUM_1, (const char *) rx_buffer, rx_len);
-			}
-
-			vTaskDelay(20 / portTICK_PERIOD_MS);
-		}
-
-		if (sock != -1) {
-			ESP_LOGE(TAG, "Shutting down socket and restarting...");
-			shutdown(sock, 0);
-			close(sock);
-		}
-	}
 	vTaskDelete(NULL);
 }
 
@@ -385,7 +332,7 @@ void app_main()
 
 	init_led();
 	beep_led(440);
-	printf("Waiting for S to go now.\n");
+	printf("Waiting for S to go low.\n");
 	//Configure S-Input which starts up the modem
 	gpio_config_t io_conf;
 	io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
@@ -416,7 +363,7 @@ void app_main()
 
 	//Wait to shut down
 	while ((gpio_get_level(GPIO_INPUT_S))==0){
-		vTaskDelay(100/portTICK_PERIOD_MS);
+		vTaskDelay(500/portTICK_PERIOD_MS);
 	}
 
 	printf("Restarting now.\n");
