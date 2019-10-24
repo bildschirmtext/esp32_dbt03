@@ -23,6 +23,9 @@
 #include <strings.h>
 
 
+char wlan_status_string[256];
+int wlan_status=0; //0=> not connected; 1=> connected
+
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t s_wifi_event_group;
 
@@ -41,18 +44,23 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry_num < 5) {
+	    wlan_status=0; //Not connected
+        if (s_retry_num < 10) {
             esp_wifi_connect();
             xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
             s_retry_num++;
             ESP_LOGI(TAG, "retry to connect to the AP");
+	    snprintf(wlan_status_string, sizeof(wlan_status_string), "retry to connect to the AP");
         }
         ESP_LOGI(TAG,"connect to the AP fail");
+	snprintf(wlan_status_string, sizeof(wlan_status_string), "connect to the AP fail");
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "got ip:%s",
                  ip4addr_ntoa(&event->ip_info.ip));
+	snprintf(wlan_status_string, sizeof(wlan_status_string), "got ip: %s",ip4addr_ntoa(&event->ip_info.ip));
         s_retry_num = 0;
+	wlan_status=1; //Connected
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -60,6 +68,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 
 void wlan_init_sta()
 {
+	memset(wlan_status_string, 0, sizeof(wlan_status_string));
     s_wifi_event_group = xEventGroupCreate();
 
     tcpip_adapter_init();

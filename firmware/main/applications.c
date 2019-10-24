@@ -7,6 +7,7 @@
 #include "lwip/netdb.h"
 
 #include "settings.h"
+#include "wlan.h"
 
 
 int app_btx(io_type_t *io)
@@ -23,20 +24,28 @@ int app_btx(io_type_t *io)
 	int addr_family;
 	int ip_protocol;
 	struct sockaddr_in dest_addr;
-	dest_addr.sin_addr.s_addr = inet_addr("195.201.94.166");
+	dest_addr.sin_addr.s_addr = inet_addr(get_setting("SRVIP"));
+	int port=atoi(get_setting("SVRPORT"));
+//	dest_addr.sin_addr.s_addr = inet_addr("195.201.94.166");
 	dest_addr.sin_family = AF_INET;
-	dest_addr.sin_port = htons(20000);
+	dest_addr.sin_port = htons(port);
 	addr_family = AF_INET;
 	ip_protocol = IPPROTO_IP;
 	inet_ntoa_r(dest_addr.sin_addr, addr_str, sizeof(addr_str) - 1);
 
 	int sock =  socket(addr_family, SOCK_STREAM, ip_protocol);
 	if (sock < 0) {
+		app_init_screen(io);
+		app_gotoxy(io, 1,1);
+		app_write_string(io, "Socket Creation Failed\x1a");
 		return -1;
 	}
 
 	int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
 	if (err != 0) {
+		app_init_screen(io);
+		app_gotoxy(io, 1,1);
+		app_write_string(io, "Connect Failed Failed\x1a");
 		return -2;
 	}
 	/* set recv timeout (100 ms) */
@@ -181,8 +190,20 @@ void terminal_task(void *pvParameters)
 		int i=0;
 		while ((i=io->in(0))<0) {
 			vTaskDelay(100/portTICK_PERIOD_MS);
-			cnt=cnt+1;
-			if (cnt>10) break;
+			app_gotoxy(io, 1,2);
+			app_write_string(io, "Status: ");
+			app_write_string(io, wlan_status_string);
+			app_write_string(io, " \x18");
+			if (wlan_status==1) {
+ 				char s[4];
+				s[0]='0'+cnt/10;
+				s[1]='0'+cnt%10;
+				s[2]=0x1a;
+				s[3]=0;
+				app_write_string(io, s);
+				cnt=cnt+1;
+				if (cnt>10) break;
+			}
 		}
 		if (i=='1') {
 			settings_app(io);
