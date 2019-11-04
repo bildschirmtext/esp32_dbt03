@@ -10,4 +10,6 @@ This is a simple attempt at making an emulator for the old BTX modems.
 
 Ground is Pin E (2)
 
+Be aware that the pinout of this sketch may be wrong and that pins 6 and 7 might be swapped.
+
 ![Sketch of schematics](https://raw.githubusercontent.com/bildschirmtext/esp32_dbt03/master/firmware/sketch_of_schematics.png)
